@@ -252,7 +252,9 @@ export function createSSEStream(options = {}) {
                 }
               }
 
-              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
+              // Keep usage-only trailers (choices[0].delta = {} + usage) that arrive after
+              // finish_reason: they carry the provider's real token counts.
+              if (!hasValuableContent(parsed, FORMATS.OPENAI) && !hasValidUsage(parsed.usage)) {
                 continue;
               }
 
