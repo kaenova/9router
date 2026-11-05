@@ -3,7 +3,7 @@ import { FORMATS } from "../translator/formats.js";
 import { PROVIDERS } from "../config/providers.js";
 import { liftReasoningAliases } from "../translator/concerns/reasoning.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
-import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
+import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, ensureStreamToolCallIds } from "./streamHelpers.js";
 import { restoreToolNames } from "./opencodeFingerprint.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
@@ -277,14 +277,19 @@ export function createSSEStream(options = {}) {
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
-                const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
-                parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
+                if (hasValidUsage(usage) && !usage.estimated) {
+                  parsed.usage = filterUsageForFormat(usage, FORMATS.OPENAI);
+                } else {
+                  const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
+                  parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
+                  usage = estimated;
+                }
                 output = `data: ${JSON.stringify(parsed)}\n`;
-                usage = estimated;
                 injectedUsage = true;
               } else if (isFinishChunk && usage) {
-                const buffered = addBufferToUsage(usage);
-                parsed.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
+                // Real upstream usage is exact: do not add the safety buffer.
+                // Estimates already include it (formatUsage), so pass them through too.
+                parsed.usage = filterUsageForFormat(usage, FORMATS.OPENAI);
                 output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               } else if (idFixed || fieldsInjected || toolCallIdFixed || toolNameRestored) {
@@ -438,13 +443,17 @@ export function createSSEStream(options = {}) {
             // Inject estimated usage if finish chunk has no valid usage
             const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
             if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
-              const estimated = estimateUsage(body, totalContentLength, sourceFormat);
-              item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
-              state.usage = estimated;
+              if (hasValidUsage(state.usage) && !state.usage.estimated) {
+                item.usage = filterUsageForFormat(state.usage, sourceFormat);
+              } else {
+                const estimated = estimateUsage(body, totalContentLength, sourceFormat);
+                item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
+                state.usage = estimated;
+              }
             } else if (state.finishReason && isFinishChunk && state.usage) {
-              // Add buffer and filter usage for client (but keep original in state.usage for logging)
-              const buffered = addBufferToUsage(state.usage);
-              item.usage = filterUsageForFormat(buffered, sourceFormat);
+              // Real upstream usage is exact: forward without the safety buffer.
+              // Estimates already include it (formatUsage).
+              item.usage = filterUsageForFormat(state.usage, sourceFormat);
             }
 
             const output = formatSSE(item, sourceFormat);

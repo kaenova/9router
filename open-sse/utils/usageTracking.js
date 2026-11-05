@@ -20,6 +20,9 @@ export const COLORS = {
 // Buffer tokens to prevent context errors
 const BUFFER_TOKENS = 2000;
 
+// Per-image token estimate used when a request carries base64 images (see estimateInputTokens).
+const IMAGE_TOKEN_ESTIMATE = 1000;
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -324,6 +327,14 @@ export function mergeUsage(prev, next) {
   if (!prev) return next || null;
   if (!next) return prev;
   const merged = { ...prev };
+  // A real provider reading must replace an earlier estimate, not be max-merged
+  // with it. Otherwise an inflated estimate (base64 counted as text) survives.
+  if (prev.estimated && !next.estimated) {
+    for (const [k, v] of Object.entries(next)) {
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) merged[k] = v;
+    }
+    delete merged.estimated;
+  }
   for (const [k, v] of Object.entries(next)) {
     // typeof NaN === "number" — guard with Number.isFinite so one malformed
     // chunk can't poison the whole accumulation (Math.max(x, NaN) is NaN).
@@ -345,7 +356,16 @@ export function estimateInputTokens(body) {
 
   try {
     // Calculate total body size (includes messages, tools, system, thinking config, etc.)
-    const bodyStr = JSON.stringify(body);
+    let bodyStr = JSON.stringify(body);
+
+    // Base64 image payloads inflate the byte count but do not tokenize like text.
+    // Replace each data-URL image with a fixed per-image estimate so chars/4 stays meaningful.
+    const imageMatches = bodyStr.match(/data:image\/[a-z0-9.+-]+;base64,/gi);
+    if (imageMatches && imageMatches.length > 0) {
+      bodyStr = bodyStr.replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi, "");
+      return Math.ceil(bodyStr.length / 4) + imageMatches.length * IMAGE_TOKEN_ESTIMATE;
+    }
+
     const totalChars = bodyStr.length;
 
     // Estimate: ~4 chars per token (rough average across all tokenizers)
