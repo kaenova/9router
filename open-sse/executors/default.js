@@ -104,6 +104,18 @@ export class DefaultExecutor extends BaseExecutor {
         delete transformed.client_metadata;
       }
       stripUnsupportedParams(this.provider, model, transformed);
+
+      // Upstream chat streams only report real token usage when asked for it.
+      // Ask for it on custom OpenAI-compatible chat streams so 9router can use the
+      // provider's real prompt_tokens instead of its local estimate.
+      if (
+        stream &&
+        Array.isArray(transformed.messages) &&
+        String(this.provider).startsWith("openai-compatible-") &&
+        transformed.stream_options === undefined
+      ) {
+        transformed.stream_options = { include_usage: true };
+      }
     }
 
     return injectReasoningContent({ provider: this.provider, model, body: transformed });
