@@ -407,6 +407,25 @@ export function createSSEStream(options = {}) {
         const extracted = extractUsage(parsed);
         if (extracted) state.usage = mergeUsage(state.usage, extracted); // Keep original usage for logging
 
+        // The finish chunk may already have gone out with an estimate, because the real
+        // usage arrives later on response.completed. Send the real numbers as an
+        // OpenAI-style trailer (choices: []) so the client sees the true count.
+        if (extracted && sourceFormat === FORMATS.OPENAI && state.estimatedUsageSent && !state.usage?.estimated && !state.realUsageTrailerSent) {
+          state.realUsageTrailerSent = true;
+          const trailer = {
+            id: parsed?.response?.id || parsed?.id || "chatcmpl-usage",
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model: model || parsed?.model || "",
+            choices: [],
+            usage: filterUsageForFormat(state.usage, FORMATS.OPENAI),
+          };
+          const trailerOutput = `data: ${JSON.stringify(trailer)}\n\n`;
+          reqLogger?.appendConvertedChunk?.(trailerOutput);
+          controller.enqueue(sharedEncoder.encode(trailerOutput));
+          sseEmittedCount++;
+        }
+
         // Responses same-format passthrough: re-emit with original event framing
         if (keepsOpenAIResponsesFormat && openAIResponsesEventName) {
           const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
@@ -448,6 +467,7 @@ export function createSSEStream(options = {}) {
               } else {
                 const estimated = estimateUsage(body, totalContentLength, sourceFormat);
                 item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
+                state.estimatedUsageSent = true; // real usage may still arrive: send a trailer then
                 state.usage = estimated;
               }
             } else if (state.finishReason && isFinishChunk && state.usage) {

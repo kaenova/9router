@@ -320,7 +320,11 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   }
 
   if (translatedResponse?.usage) {
-    translatedResponse.usage = filterUsageForFormat(addBufferToUsage(translatedResponse.usage), sourceFormat);
+    // Buffer only protects estimates (formatUsage already includes it); real usage is exact.
+    const usageForClient = translatedResponse.usage.estimated
+      ? translatedResponse.usage
+      : addBufferToUsage(translatedResponse.usage);
+    translatedResponse.usage = filterUsageForFormat(usageForClient, sourceFormat);
   }
 
   // Strip reasoning_content only when content is non-empty.
