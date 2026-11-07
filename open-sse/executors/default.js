@@ -95,6 +95,35 @@ export class DefaultExecutor extends BaseExecutor {
     super(provider, PROVIDERS[provider] || PROVIDERS.openai);
   }
 
+  async execute(options) {
+    const result = await super.execute(options);
+    if (!this.provider?.startsWith?.("openai-compatible-") ||
+        resolveOpenAICompatibleApiType(this.provider, options.credentials) !== "responses" ||
+        result.response.status !== 400 || result.transformedBody?.reasoning?.summary !== "detailed") {
+      return result;
+    }
+
+    // Retry only a specific rejection of the detailed summary value. Do not
+    // mask unrelated 400s or retry requests that may already have succeeded.
+    let error;
+    try {
+      const payload = await result.response.clone().json();
+      error = payload?.error || payload;
+    } catch {
+      return result;
+    }
+    const param = typeof error?.param === "string" ? error.param.toLowerCase() : "";
+    const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+    const code = typeof error?.code === "string" ? error.code.toLowerCase() : "";
+    const isSummary = param.includes("summary") || /reasoning[._ ]summary/.test(message);
+    const rejectedValue = /invalid|unsupported|not supported|not allowed/.test(`${code} ${message}`);
+    if (!isSummary || !rejectedValue || (!message.includes("detailed") && code !== "invalid_value")) return result;
+
+    options.log?.debug?.("RETRY", "reasoning.summary detailed rejected; retrying with auto");
+    const body = { ...options.body, reasoning: { ...options.body.reasoning, summary: "auto" } };
+    return super.execute({ ...options, body });
+  }
+
   transformRequest(model, body, stream, credentials) {
     const transformed = this.applyJsonSchemaFallback(this.applyNousAttribution(model, body, stream, credentials));
 

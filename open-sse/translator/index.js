@@ -92,6 +92,9 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
   // Capture thinking intent from the original (pre-translation) body, before any
   // format conversion strips/renames the fields. Applied after translation.
   const thinkingIntent = captureThinking(result);
+  // Translation from Chat may synthesize a summary, so remember whether the
+  // original client explicitly chose one before the source body is converted.
+  const clientReasoningSummary = body.reasoning?.summary;
 
   // Capture session id from the original body (envelope still intact, e.g. antigravity request.sessionId)
   const clientSessionId = captureSessionId(result, credentials, connectionId, targetFormat);
@@ -136,6 +139,13 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
     (sourceFormat === FORMATS.OPENAI || sourceFormat === FORMATS.CLAUDE);
   if (!kiroThinkingMappedByTranslator) {
     applyThinking(targetFormat, model, result, provider, thinkingIntent);
+  }
+
+  // Prefer detailed summaries on compatible Responses endpoints unless the
+  // client explicitly requested a different summary or disabled reasoning.
+  if (targetFormat === FORMATS.OPENAI_RESPONSES && provider?.startsWith("openai-compatible-") &&
+      clientReasoningSummary === undefined && result.reasoning?.effort && result.reasoning.effort !== "none") {
+    result.reasoning.summary = "detailed";
   }
 
   // Always normalize to clean OpenAI format when target is OpenAI

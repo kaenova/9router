@@ -263,6 +263,12 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         }
       }));
       const hasToolCalls = toolCalls.length > 0;
+      const reasoningContent = (jsonResponse.output || [])
+        .filter((item) => item?.type === RESPONSES_ITEM.REASONING && Array.isArray(item.summary))
+        .flatMap((item) => item.summary)
+        .filter((part) => part?.type === RESPONSES_ITEM.SUMMARY_TEXT && typeof part.text === "string" && part.text.length > 0)
+        .map((part) => part.text)
+        .join("\n");
 
       if (sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI) {
         finalResp = {
@@ -275,6 +281,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         };
       } else {
         const message = { role: "assistant", content: textContent || (hasToolCalls ? null : "") };
+        if (reasoningContent) message.reasoning_content = reasoningContent;
         if (hasToolCalls) message.tool_calls = toolCalls;
         const responseDone = jsonResponse.status === "completed" || jsonResponse.status === "done";
         const finishReason = hasToolCalls ? "tool_calls" : (responseDone ? "stop" : (jsonResponse.status || "stop"));

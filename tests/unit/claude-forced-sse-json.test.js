@@ -56,6 +56,30 @@ describe("Claude JSON clients behind forced-stream upstreams", () => {
     expect(json.content.filter(block => block.type === "text").map(block => block.text).join("")).toBe(text);
   });
 
+  it.each([FORMATS.OPENAI, FORMATS.CLAUDE])("preserves Responses reasoning summaries for non-streaming %s clients", async (sourceFormat) => {
+    const output = [
+      { type: "reasoning", summary: [{ type: "summary_text", text: "First part." }, { type: "summary_text", text: "Second part." }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Answer" }] },
+      { type: "reasoning", summary: [{ type: "summary_text", text: "Third part." }, { type: "other", text: "Ignore" }] },
+    ];
+    const result = await handleForcedSSEToJson(context(responsesSSE(output), sourceFormat, FORMATS.OPENAI_RESPONSES));
+    const json = await result.response.json();
+    const reasoning = "First part.\nSecond part.\nThird part.";
+    if (sourceFormat === FORMATS.OPENAI) {
+      expect(json.choices[0].message).toMatchObject({ content: "Answer", reasoning_content: reasoning });
+    } else {
+      expect(json.content).toContainEqual({ type: "thinking", thinking: reasoning });
+      expect(json.content).toContainEqual({ type: "text", text: "Answer" });
+    }
+  });
+
+  it("omits reasoning_content if the provider returns no summary", async () => {
+    const output = [{ type: "reasoning", summary: [] }, { type: "message", role: "assistant", content: [{ type: "output_text", text: "Answer" }] }];
+    const result = await handleForcedSSEToJson(context(responsesSSE(output), FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES));
+    const json = await result.response.json();
+    expect(json.choices[0].message).not.toHaveProperty("reasoning_content");
+  });
+
   it("returns Responses function calls as Claude tool_use blocks", async () => {
     const result = await handleForcedSSEToJson(context(responsesSSE([toolItem]), FORMATS.CLAUDE, FORMATS.OPENAI_RESPONSES));
     const json = await result.response.json();

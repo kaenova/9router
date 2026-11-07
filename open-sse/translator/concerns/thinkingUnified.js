@@ -129,6 +129,11 @@ const NATIVE_ONLY_FORMATS = new Set(["gemini-level", "gemini-budget", "claude-bu
 
 function resolveFormat(targetFormat, model, provider) {
   if (targetFormat === "commandcode") return "commandcode";
+  // Custom Responses nodes must use the Responses wire shape regardless of the
+  // model's Chat-oriented thinkingFormat or the node's legacy ID suffix.
+  if (targetFormat === "openai-responses" && provider?.startsWith("openai-compatible-")) {
+    return "openai-compatible-responses";
+  }
   // A multi-endpoint provider can declare, per transports[] entry, the thinking shape that
   // endpoint accepts. It wins over the model's thinkingFormat, which describes the Chat wire:
   // strict /responses upstreams (Meta, OpenCode Go) reject Chat-shaped reasoning_effort /
@@ -270,6 +275,14 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display, model = "")
       if (none && canDisable) { body.reasoning_effort = "none"; break; }
       const level = toLevel(eff);
       if (level) body.reasoning_effort = normalizeOpenAILevel(level, supportedLevels);
+      break;
+    }
+    case "openai-compatible-responses": {
+      const level = none && canDisable ? "none" : toLevel(eff);
+      if (level) {
+        body.reasoning = { ...body.reasoning, effort: normalizeOpenAILevel(level, supportedLevels) };
+        if (level !== "none" && body.reasoning.summary === undefined) body.reasoning.summary = "detailed";
+      }
       break;
     }
     case "openai-responses": {
@@ -456,7 +469,10 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
   // comes back at all; keep what the client asked for instead of resetting it.
   // An OpenAI-shaped client's ask arrives via the captured intent instead.
   const display = typeof body.thinking?.display === "string" ? body.thinking.display : intent?.display;
+  const responsesReasoning = fmt === "openai-compatible-responses" && body.reasoning &&
+    typeof body.reasoning === "object" && !Array.isArray(body.reasoning) ? body.reasoning : null;
   stripAll(body);
+  if (responsesReasoning) body.reasoning = responsesReasoning;
   applyFormat(fmt, body, cfg, caps, supportedLevels, display, cleanModel);
   return body;
 }
